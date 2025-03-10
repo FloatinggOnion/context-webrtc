@@ -8,6 +8,10 @@ fastapi = {extras = ["standard"], version = "*"}
 websockets = "*"
 pydantic = "*"
 pydub = "*"
+aiortc = "*"
+ffmpeg-python = "*"
+ffmpeg = "*"
+python-socketio = "*"
 
 [dev-packages]
 
