@@ -12,9 +12,6 @@ from transformers import pipeline
 from google import genai
 from dotenv import load_dotenv
 
-load_dotenv()
-GEMINI_API_KEY = os.getenv("GOOGLE_GEMINI_API_KEY")
-
 
 class ContextRTTranslate:
     '''

@@ -1,12 +1,19 @@
-from fastapi import FastAPI, WebSocket
+from dotenv import load_dotenv
+import os
 import json
+
+from fastapi import FastAPI, WebSocket
+
 from rt_translate import ContextRTTranslate
+
+
+load_dotenv()
 
 app = FastAPI()
 
+GEMINI_API_KEY = os.getenv("GOOGLE_GEMINI_API_KEY")
 UPLOAD_FOLDER = "uploads"
-translator = ContextRTTranslate(upload_folder=UPLOAD_FOLDER, buffer_size=5)  # Initialize with buffer
-
+translator = ContextRTTranslate(upload_folder=UPLOAD_FOLDER, buffer_size=5)
 connections = {}
 
 @app.websocket("/ws/{client_id}")
