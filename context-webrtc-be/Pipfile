@@ -12,6 +12,11 @@ aiortc = "*"
 ffmpeg-python = "*"
 ffmpeg = "*"
 python-socketio = "*"
+av = "*"
+speechrecognition = "*"
+transformers = "*"
+google-genai = "*"
+python-dotenv = "*"
 
 [dev-packages]
 

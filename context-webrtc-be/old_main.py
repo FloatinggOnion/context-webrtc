@@ -1,62 +1,86 @@
 from fastapi import FastAPI, WebSocket
-import asyncio
-from pydub import AudioSegment
-from aiortc import RTCPeerConnection, RTCSessionDescription, MediaStreamTrack
+import datetime
+import os
+import io
+import av
+import json
+
+from utils import recognise_speech_from_stream
 
 app = FastAPI()
-pcs = set()  # peer connections
 
-class AudioSaver(MediaStreamTrack):
-    kind = "audio"
+# Ensure uploads folder exists
+UPLOAD_FOLDER = "uploads"
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
-    def __init__(self, track):
-        super().__init__()
-        self.track = track
-        self.audio_data = bytearray()
+connections = {}
 
-    async def recv(self):
-        frame = await self.track.recv()
-        self.audio_data.extend(frame.to_bytes())
-
-        # save every ~5 seconds (16kHz * 2 bytes/sample)
-        if len(self.audio_data) >= 16000 * 2 * 5:
-            self.save_audio()
-            self.audio_data.clear()
-
-        return frame
-
-    def save_audio(self):
-        audio_segment = AudioSegment(
-            data=bytes(self.audio_data),
-            sample_width=2,  # WebRTC 16-bit PCM
-            frame_rate=16000,  # WebRTC common sample rate
-            channels=1  # single channel / mono channel
-        )
-        audio_segment.export("output_audio.wav", format="wav")
-        print("Saved audio chunk!")
-
-@app.websocket("/ws")
-async def websocket_endpoint(websocket: WebSocket):
+@app.websocket("/ws/{client_id}")
+async def websocket_endpoint(websocket: WebSocket, client_id: str):
     await websocket.accept()
-    
-    pc = RTCPeerConnection()
-    pcs.add(pc)  # store the connection
-    
+    connections[client_id] = websocket
+    print(f"🔴 Client {client_id} connected.")
+
     try:
         while True:
-            data = await websocket.receive_json()
-            if "sdp" in data:
-                await pc.setRemoteDescription(RTCSessionDescription(**data))
+            data = await websocket.receive_text()
+            message = eval(data)  # Convert string to dict
 
-                for t in pc.getTransceivers():
-                    if t.kind == "audio":
-                        pc.addTrack(AudioSaver(t.receiver.track))
+            if message["type"] == "offer":
+                for client, conn in connections.items():
+                    if client != client_id:
+                        await conn.send_text(json.dumps(message))  # Send offer to receiver
 
-                answer = await pc.createAnswer()
-                await pc.setLocalDescription(answer)
-                await websocket.send_json({"sdp": pc.localDescription.sdp, "type": pc.localDescription.type})
+            elif message["type"] == "answer":
+                for client, conn in connections.items():
+                    if client != client_id:
+                        await conn.send_text(json.dumps(message))  # Send answer to caller
+
+            elif message["type"] == "candidate":
+                for client, conn in connections.items():
+                    if client != client_id:
+                        await conn.send_text(json.dumps(message))  # Send ICE candidate
+
+            elif message["type"] == "video":
+                media_data = await websocket.receive_bytes()
+                timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
+                audio_filename = os.path.join(UPLOAD_FOLDER, f"audio_{timestamp}.wav")
+
+                # Extract audio
+                input_buffer = io.BytesIO(media_data)
+                output_buffer = io.BytesIO()
+                container = av.open(input_buffer, format="webm")
+                audio_stream = container.streams.audio[0]
+
+                with av.open(output_buffer, "w", format="wav") as out_container:
+                    out_stream = out_container.add_stream("pcm_s16le", rate=48000)
+                    out_stream.layout = "mono"
+
+                    for frame in container.decode(audio_stream):
+                        packet = out_stream.encode(frame)
+                        if packet:
+                            out_container.mux(packet)
+
+                # Save extracted audio
+                with open(audio_filename, "wb") as f:
+                    f.write(output_buffer.getvalue())
+
+                print(f"✅ Saved audio: {audio_filename}")
+
+                # transcribe audio
+                text = recognise_speech_from_stream(audio_filename)
+                print(f"🎤 Transcribed text: {text}")
+
+                # Stream video back
+                for client, conn in connections.items():
+                    if client != client_id:
+                        print(f"📹 Sending video to client {client}")
+                        print(media_data)
+                        await conn.send_bytes(media_data)
+
     except Exception as e:
-        print("WebSocket Error:", e)
+        print(f"⚠️ Error: {e}")
+
     finally:
-        pcs.discard(pc)  # clean up the peer connection when done
-        await pc.close()
+        del connections[client_id]
+        print(f"🔴 Client {client_id} disconnected.")
